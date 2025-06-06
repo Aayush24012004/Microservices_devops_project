@@ -1,0 +1,6 @@
+instance_type = "t3.medium"
+ami = "ami-0a7d80731ae1b2435"
+key_name = "microservicesProject"
+volume_size = "29"
+region_name = "us-east-1"
+server_name = "JENKINS-SERVER"
