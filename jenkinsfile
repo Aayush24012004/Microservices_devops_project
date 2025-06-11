@@ -1,0 +1,153 @@
+pipeline {
+    agent any
+    tools {
+        jdk 'JDK17'
+        nodejs 'NodeJS'                               
+    }
+    parameters {
+        string(name: "ECR_REPO_NAME",    defaultValue: "microservices-project", description: "Enter the ECR repository name")
+        string(name: "AWS_REGION",       defaultValue: "us-east-1",             description: "Enter your aws region")
+        string(name: "AWS_ACCOUNT_ID",   defaultValue: "",                    description: "Enter your AWS Account ID")
+    }
+
+    environment {
+        PROJECT_NAME = 'my-app'
+        SCANNER_HOME = tool 'SonarQube Scanner'
+    }
+
+    options {
+        buildDiscarder(logRotator(daysToKeepStr: '10'))
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                echo "Code checked out from branch: ${env.BRANCH_NAME}"
+            }
+        }
+
+        stage('Sonarqube-Analysis') {
+            steps {
+                withSonarQubeEnv('sonarqube-server') {
+                    sh """
+                    ${SCANNER_HOME}/bin/sonar-scanner \
+                      -Dsonar.projectName=microservicesProject \
+                      -Dsonar.projectKey=microservicesProject
+                    """
+                }
+            }
+        }
+
+        stage('Sonarqube-qualitygate') {
+            steps {
+                echo 'Running Sonarqube-qualitygate test'
+                waitForQualityGate abortPipeline: false, credentialsId: 'sonarqube-token'  
+            }
+        }
+
+        stage('NPM install') {
+            steps {
+                echo 'Running NPM install'
+                sh 'npm install'
+            }
+        }
+
+        stage('Trivy Analysis') {
+            steps {
+                echo 'Running Trivy Analysis'
+                sh 'trivy fs . > trivy-scan-results.txt'                                 
+            }
+        }
+
+        stage('Docker Image Build') {
+            steps {
+                echo 'Running Docker Image Build'
+                sh "docker build -t ${params.ECR_REPO_NAME} ."                             
+            }
+        }
+
+        stage('Create ECR Repository') {
+            steps {
+                echo 'Running Create ECR Repository'
+                withCredentials([
+                  string(credentialsId: 'access-key', variable: 'AWS_ACCESS_KEY'),
+                  string(credentialsId: 'secret-key', variable: 'AWS_SECRET_KEY')
+                ]) {
+                    sh """
+                    aws configure set aws_access_key_id     $AWS_ACCESS_KEY
+                    aws configure set aws_secret_access_key $AWS_SECRET_KEY
+                    aws ecr describe-repositories \
+                      --repository-names ${params.ECR_REPO_NAME} \
+                      --region ${params.AWS_REGION} \
+                    || aws ecr create-repository \
+                      --repository-name ${params.ECR_REPO_NAME} \
+                      --region ${params.AWS_REGION}
+                    """
+                }
+            }
+        }
+
+        stage('Login to ECR & Tag Image') {
+            steps {
+                echo 'Running Login to ECR & Tag Image'
+                withCredentials([
+                  string(credentialsId: 'access-key', variable: 'AWS_ACCESS_KEY'),
+                  string(credentialsId: 'secret-key', variable: 'AWS_SECRET_KEY')
+                ]) {
+                    sh """
+                    aws ecr get-login-password --region ${params.AWS_REGION} \
+                      | docker login --username AWS \
+                                    --password-stdin ${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com
+                    docker tag ${params.ECR_REPO_NAME}:latest \
+                      ${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com/${params.ECR_REPO_NAME}:${env.BUILD_NUMBER}
+                    docker tag ${params.ECR_REPO_NAME}:latest \
+                      ${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com/${params.ECR_REPO_NAME}:latest
+                    """
+                }
+            }
+        }
+
+        stage('Push the Image to AWS ECR') {
+            steps {
+                echo 'Running Push the Image to AWS ECR'
+                withCredentials([
+                  string(credentialsId: 'access-key', variable: 'AWS_ACCESS_KEY'),
+                  string(credentialsId: 'secret-key', variable: 'AWS_SECRET_KEY')
+                ]) {
+                    sh """
+                    docker push ${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com/${params.ECR_REPO_NAME}:${env.BUILD_NUMBER}
+                    docker push ${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com/${params.ECR_REPO_NAME}:latest
+                    """
+                }
+            }
+        }
+
+        stage('Cleanup Images from Jenkins Server') {
+            steps {
+                echo 'Running Cleanup Images from Jenkins Server'
+                sh """
+                docker rmi ${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com/${params.ECR_REPO_NAME}:${env.BUILD_NUMBER}
+                docker rmi ${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com/${params.ECR_REPO_NAME}:latest
+                """
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                def status = currentBuild.currentResult
+                def message = """
+                {
+                  "text": "🚀 *Build ${status}* for *${env.JOB_NAME} #${env.BUILD_NUMBER}*\n🔗 <${env.BUILD_URL}|View Build>"
+                }
+                """
+                sh """
+                  curl -X POST -H 'Content-Type: application/json' \
+                  -d '${message}' \
+                  'https://chat.googleapis.com/v1/spaces/AAQABmX28z8/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=Q8Wb4YjRSREYH7J6petZMJUvTenRFvYfMJUQXa0yAR8'
+                """
+            }
+        }
+    }
+}
