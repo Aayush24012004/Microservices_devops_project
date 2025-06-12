@@ -39,14 +39,7 @@ pipeline {
                 waitForQualityGate abortPipeline: false, credentialsId: 'sonarqube-token'  
             }
         }
-
-        stage('NPM install') {
-            steps {
-                echo 'Running NPM install'
-                sh 'npm install'
-            }
-        }
-
+        
         stage('Trivy Analysis') {
             steps {
                 echo 'Running Trivy Analysis'
