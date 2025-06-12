@@ -14,11 +14,6 @@ pipeline {
         PROJECT_NAME = 'my-app'
         SCANNER_HOME = tool 'SonarQube Scanner'
     }
-
-    options {
-        buildDiscarder(logRotator(daysToKeepStr: '10'))
-    }
-
     stages {
         stage('Checkout') {
             steps {
@@ -61,7 +56,7 @@ pipeline {
 
         stage('Docker Image Build') {
             steps {
-                echo 'Running Docker Image Build'
+                echo 'Running Docker image Build'
                 sh "docker build -t ${params.ECR_REPO_NAME} ."                             
             }
         }
