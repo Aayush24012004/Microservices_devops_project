@@ -45,12 +45,6 @@ pipeline {
             }
         }
 
-        stage('NPM install') {
-            steps {
-                echo 'Running NPM install'
-                sh 'npm install'
-            }
-        }
 
         stage('Trivy Analysis') {
             steps {
