@@ -54,11 +54,16 @@ pipeline {
         }
 
         stage('Docker Image Build') {
-            steps {
-                echo 'Running Docker Image Build'
-                sh "docker build -t ${params.ECR_REPO_NAME} ."                             
-            }
+    steps {
+        echo 'Running Docker Image Build'
+        dir("${env.WORKSPACE}") {
+            sh 'ls -la'
+            sh 'cat Dockerfile || echo "Dockerfile not found"'
+            sh "sudo docker build -f Dockerfile -t ${params.ECR_REPO_NAME} ."
         }
+    }
+}
+
 
         stage('Create ECR Repository') {
             steps {
