@@ -55,14 +55,23 @@ pipeline {
 
         stage('Docker Image Build') {
     steps {
-        echo 'Running Docker Image Build'
-        dir("${env.WORKSPACE}") {
-            sh 'ls -la'
-            sh 'cat Dockerfile || echo "Dockerfile not found"'
-            sh "sudo docker build -f Dockerfile -t ${params.ECR_REPO_NAME} ."
+        script {
+            def services = sh(
+                script: "find src -maxdepth 2 -name Dockerfile | sed 's|/Dockerfile||'",
+                returnStdout: true
+            ).trim().split('\n')
+
+            for (svcPath in services) {
+                def svc = svcPath.tokenize('/').last()
+                echo "→ Building Docker image for ${svc}"
+                dir(svcPath) {
+                    sh "docker build -t ${params.ECR_REPO_NAME}-${svc}:${env.BUILD_NUMBER} ."
+                }
+            }
         }
     }
 }
+
 
 
         stage('Create ECR Repository') {
