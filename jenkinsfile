@@ -39,7 +39,6 @@ pipeline {
                 waitForQualityGate abortPipeline: false, credentialsId: 'sonarqube-token'  
             }
         }
-        
         stage('Trivy Analysis') {
             steps {
                 echo 'Running Trivy Analysis'
@@ -47,12 +46,28 @@ pipeline {
             }
         }
 
-        stage('Docker Image Build') {
-            steps {
-                echo 'Running Docker image Build'
-                sh "docker build -t ${params.ECR_REPO_NAME} ."                             
-            }
+        stage('Build All Docker Images') {
+  steps {
+    script {
+      // find each service folder under src/ that contains a Dockerfile
+      def services = sh(
+        script: "find src -maxdepth 2 -type f -name Dockerfile | sed 's|/Dockerfile\$||'",
+        returnStdout: true
+      ).trim().split('\n')
+
+      for (svcPath in services) {
+        // svcPath == "src/auth-service", "src/user-service", etc.
+        def svc = svcPath.tokenize('/').last()
+        echo "→ Building Docker image for ${svc}"
+        dir(svcPath) {
+          // use sudo if jenkins user still can’t hit /var/run/docker.sock
+          sh "sudo docker build -t ${params.ECR_REPO_NAME}-${svc}:${env.BUILD_NUMBER} ."
         }
+      }
+    }
+  }
+}
+
 
         stage('Create ECR Repository') {
             steps {
