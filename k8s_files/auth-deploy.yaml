@@ -16,6 +16,6 @@ spec:
     spec:
       containers:
         - name: auth-service
-          image: 667183278587.dkr.ecr.us-east-1.amazonaws.com/microservices-project-auth-service
+          image: 667183278587.dkr.ecr.us-east-1.amazonaws.com/microservices-project-auth-service:latest
           ports:
             - containerPort: 3001

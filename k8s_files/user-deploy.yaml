@@ -16,6 +16,6 @@ spec:
     spec:
       containers:
         - name: user-service
-          image: 667183278587.dkr.ecr.us-east-1.amazonaws.com/microservices-project-user-service
+          image: 667183278587.dkr.ecr.us-east-1.amazonaws.com/microservices-project-user-service:latest
           ports:
             - containerPort: 3002

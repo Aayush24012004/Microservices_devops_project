@@ -16,6 +16,6 @@ spec:
     spec:
       containers:
         - name: product-service
-          image: 667183278587.dkr.ecr.us-east-1.amazonaws.com/microservices-project-product-service
+          image: 667183278587.dkr.ecr.us-east-1.amazonaws.com/microservices-project-product-service:latest
           ports:
             - containerPort: 3003
