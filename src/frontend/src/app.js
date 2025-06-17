@@ -6,8 +6,15 @@ function App() {
   const [products, setProducts] = useState([]);
 
   useEffect(() => {
-    axios.get("/api/users").then((res) => setUsers(res.data));
-    axios.get("/api/products").then((res) => setProducts(res.data));
+    axios
+      .get("/api/users")
+      .then((res) => setUsers(res.data))
+      .catch((err) => console.error("Users fetch error:", err));
+
+    axios
+      .get("/api/products")
+      .then((res) => setProducts(res.data))
+      .catch((err) => console.error("Products fetch error:", err));
   }, []);
 
   return (
