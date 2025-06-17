@@ -1,184 +1,187 @@
 pipeline {
-    agent any
-    tools {
-        jdk 'JDK17'
-        nodejs 'NodeJS'                               
+  agent any
+  tools {
+    jdk 'JDK17'
+    nodejs 'NodeJS'
+  }
+  parameters {
+    string(name: 'ECR_REPO_NAME',  defaultValue: 'microservices-project', description: 'Enter the ECR repository name')
+    string(name: 'AWS_REGION',     defaultValue: 'us-east-1',            description: 'Enter your AWS region')
+    string(name: 'AWS_ACCOUNT_ID', defaultValue: '',                      description: 'Enter your AWS Account ID')
+  }
+
+  environment {
+    SCANNER_HOME = tool 'SonarQube Scanner'
+  }
+
+  options {
+    buildDiscarder(logRotator(daysToKeepStr: '10'))
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        checkout scm
+        echo "Checked out branch ${env.BRANCH_NAME}"
+      }
     }
-    parameters {
-        string(name: "ECR_REPO_NAME",    defaultValue: "microservices-project", description: "Enter the ECR repository name")
-        string(name: "AWS_REGION",       defaultValue: "us-east-1",             description: "Enter your aws region")
-        string(name: "AWS_ACCOUNT_ID",   defaultValue: "",                    description: "Enter your AWS Account ID")
+
+    stage('SonarQube Analysis') {
+      steps {
+        withSonarQubeEnv('sonarqube-server') {
+          sh """
+            ${SCANNER_HOME}/bin/sonar-scanner \
+              -Dsonar.projectName=microservicesProject \
+              -Dsonar.projectKey=microservicesProject
+          """
+        }
+      }
     }
 
-    environment {
-        PROJECT_NAME = 'my-app'
-        SCANNER_HOME = tool 'SonarQube Scanner'
+    stage('Quality Gate') {
+      steps {
+        waitForQualityGate abortPipeline: false, credentialsId: 'sonarqube-token'
+      }
     }
 
-    options {
-        buildDiscarder(logRotator(daysToKeepStr: '10'))
+    stage('Trivy Scan') {
+      steps {
+        sh 'trivy fs . > trivy-scan-results.txt'
+      }
     }
 
-    stages {
-        stage('Checkout') {
-            steps {
-                echo "Code checked out from branch: ${env.BRANCH_NAME}"
-            }
-        }
-
-        stage('Sonarqube-Analysis') {
-            steps {
-                withSonarQubeEnv('sonarqube-server') {
-                    sh """
-                    ${SCANNER_HOME}/bin/sonar-scanner \
-                      -Dsonar.projectName=microservicesProject \
-                      -Dsonar.projectKey=microservicesProject
-                    """
-                }
-            }
-        }
-
-        stage('Sonarqube-qualitygate') {
-            steps {
-                echo 'Running Sonarqube-qualitygate test'
-                waitForQualityGate abortPipeline: false, credentialsId: 'sonarqube-token'  
-            }
-        }
-
-
-        stage('Trivy Analysis') {
-            steps {
-                echo 'Running Trivy Analysis'
-                sh 'trivy fs . > trivy-scan-results.txt'                                 
-            }
-        }
-
-        stage('Docker Image Build') {
-    steps {
+    stage('Docker Build') {
+      steps {
         script {
-            def services = sh(
-                script: "find src -maxdepth 2 -name Dockerfile | sed 's|/Dockerfile||'",
-                returnStdout: true
-            ).trim().split('\n')
+          // find each service folder containing a Dockerfile
+          def services = sh(
+            script: "find src -maxdepth 2 -name Dockerfile | sed 's|/Dockerfile\$||'",
+            returnStdout: true
+          ).trim().split('\n')
 
-            for (svcPath in services) {
-                def svc = svcPath.tokenize('/').last()
-                echo "→ Building Docker image for ${svc}"
-                dir(svcPath) {
-                    sh "docker build -t ${params.ECR_REPO_NAME}-${svc}:${env.BUILD_NUMBER} ."
-                }
+          for (svcPath in services) {
+            def svc = svcPath.tokenize('/').last()
+            echo "→ Building Docker image for ${svc}"
+            dir(svcPath) {
+              sh "docker build -t ${params.ECR_REPO_NAME}-${svc}:${env.BUILD_NUMBER} ."
             }
+          }
         }
+      }
     }
-}
-    stage('Create ECR Repository') {
-            steps {
-                echo 'Running Create ECR Repository'
-                withCredentials([
-                  string(credentialsId: 'access-key', variable: 'AWS_ACCESS_KEY'),
-                  string(credentialsId: 'secret-key', variable: 'AWS_SECRET_KEY')
-                ]) {
-                    sh """
-                    aws configure set aws_access_key_id     $AWS_ACCESS_KEY
-                    aws configure set aws_secret_access_key $AWS_SECRET_KEY
-                    aws ecr describe-repositories \
-                      --repository-names ${params.ECR_REPO_NAME} \
-                      --region ${params.AWS_REGION} \
-                    || aws ecr create-repository \
-                      --repository-name ${params.ECR_REPO_NAME} \
-                      --region ${params.AWS_REGION}
-                    """
-                }
-            }
-        }
 
-    stage('Login to ECR & Tag Images') {
-    steps {
-        echo 'Logging in to ECR & tagging images'
+    stage('Ensure ECR Repo') {
+      steps {
         withCredentials([
-            string(credentialsId: 'access-key', variable: 'AWS_ACCESS_KEY'),
-            string(credentialsId: 'secret-key', variable: 'AWS_SECRET_KEY')
+          string(credentialsId: 'access-key', variable: 'AWS_ACCESS_KEY_ID'),
+          string(credentialsId: 'secret-key', variable: 'AWS_SECRET_ACCESS_KEY')
         ]) {
-            script {
-                sh """
-                aws configure set aws_access_key_id     $AWS_ACCESS_KEY
-                aws configure set aws_secret_access_key $AWS_SECRET_KEY
-                aws ecr get-login-password --region ${params.AWS_REGION} \
-                | docker login --username AWS \
-                  --password-stdin ${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com
-                """
+          sh """
+            aws --region ${params.AWS_REGION} \
+              ecr describe-repositories --repository-names ${params.ECR_REPO_NAME}-auth-service || \
+            aws --region ${params.AWS_REGION} \
+              ecr create-repository --repository-name ${params.ECR_REPO_NAME}-auth-service
 
-                def services = sh(
-                    script: "find src -maxdepth 2 -name Dockerfile | sed 's|/Dockerfile||'",
-                    returnStdout: true
-                ).trim().split('\n')
+            aws --region ${params.AWS_REGION} \
+              ecr describe-repositories --repository-names ${params.ECR_REPO_NAME}-user-service || \
+            aws --region ${params.AWS_REGION} \
+              ecr create-repository --repository-name ${params.ECR_REPO_NAME}-user-service
 
-                for (svcPath in services) {
-                    def svc = svcPath.tokenize('/').last()
-                    def image = "${params.ECR_REPO_NAME}-${svc}"
-                    def remoteImage = "${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com/${image}"
-                    
-                    sh """
-                    docker tag ${image}:${env.BUILD_NUMBER} ${remoteImage}:${env.BUILD_NUMBER}
-                    docker tag ${image}:${env.BUILD_NUMBER} ${remoteImage}:latest
-                    """
-                }
-            }
+            aws --region ${params.AWS_REGION} \
+              ecr describe-repositories --repository-names ${params.ECR_REPO_NAME}-product-service || \
+            aws --region ${params.AWS_REGION} \
+              ecr create-repository --repository-name ${params.ECR_REPO_NAME}-product-service
+
+            aws --region ${params.AWS_REGION} \
+              ecr describe-repositories --repository-names ${params.ECR_REPO_NAME}-frontend || \
+            aws --region ${params.AWS_REGION} \
+              ecr create-repository --repository-name ${params.ECR_REPO_NAME}-frontend
+          """
         }
+      }
     }
-}
 
+    stage('Login & Tag') {
+      steps {
+        withCredentials([
+          string(credentialsId: 'access-key', variable: 'AWS_ACCESS_KEY_ID'),
+          string(credentialsId: 'secret-key', variable: 'AWS_SECRET_ACCESS_KEY')
+        ]) {
+          script {
+            sh "aws ecr get-login-password --region ${params.AWS_REGION} | docker login --username AWS --password-stdin ${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com"
 
-    stage('Push Images to AWS ECR') {
-    steps {
-        echo 'Pushing images to AWS ECR'
-        script {
             def services = sh(
-                script: "find src -maxdepth 2 -name Dockerfile | sed 's|/Dockerfile||'",
-                returnStdout: true
+              script: "find src -maxdepth 2 -name Dockerfile | sed 's|/Dockerfile\$||'",
+              returnStdout: true
             ).trim().split('\n')
 
             for (svcPath in services) {
-                def svc = svcPath.tokenize('/').last()
-                def image = "${params.ECR_REPO_NAME}-${svc}"
-                def remoteImage = "${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com/${image}"
-
-                sh """
-                docker push ${remoteImage}:${env.BUILD_NUMBER}
-                docker push ${remoteImage}:latest
-                """
+              def svc = svcPath.tokenize('/').last()
+              def localImage  = "${params.ECR_REPO_NAME}-${svc}:${env.BUILD_NUMBER}"
+              def remoteRepo  = "${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com/${params.ECR_REPO_NAME}-${svc}"
+              sh """
+                docker tag ${localImage} ${remoteRepo}:${env.BUILD_NUMBER}
+                docker tag ${localImage} ${remoteRepo}:latest
+              """
             }
+          }
         }
-    }
-}
-
-
-    stage('Cleanup Images from Jenkins Server') {
-            steps {
-                echo 'Running Cleanup Images from Jenkins Server'
-                sh """
-                docker rmi ${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com/${params.ECR_REPO_NAME}:${env.BUILD_NUMBER}
-                docker rmi ${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com/${params.ECR_REPO_NAME}:latest
-                """
-            }
-        }
+      }
     }
 
-    post {
-        always {
-            script {
-                def status = currentBuild.currentResult
-                def message = """
-                {
-                  "text": "🚀 *Build ${status}* for *${env.JOB_NAME} #${env.BUILD_NUMBER}*\n🔗 <${env.BUILD_URL}|View Build>"
-                }
-                """
-                sh """
-                  curl -X POST -H 'Content-Type: application/json' \
-                  -d '${message}' \
-                  'https://chat.googleapis.com/v1/spaces/AAQABmX28z8/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=Q8Wb4YjRSREYH7J6petZMJUvTenRFvYfMJUQXa0yAR8'
-                """
-            }
+    stage('Push to ECR') {
+      steps {
+        script {
+          def services = sh(
+            script: "find src -maxdepth 2 -name Dockerfile | sed 's|/Dockerfile\$||'",
+            returnStdout: true
+          ).trim().split('\n')
+
+          for (svcPath in services) {
+            def svc = svcPath.tokenize('/').last()
+            def remoteRepo = "${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com/${params.ECR_REPO_NAME}-${svc}"
+            sh """
+              docker push ${remoteRepo}:${env.BUILD_NUMBER}
+              docker push ${remoteRepo}:latest
+            """
+          }
         }
+      }
     }
+
+    stage('Cleanup') {
+      steps {
+        script {
+          def services = sh(
+            script: "find src -maxdepth 2 -name Dockerfile | sed 's|/Dockerfile\$||'",
+            returnStdout: true
+          ).trim().split('\n')
+
+          for (svcPath in services) {
+            def svc = svcPath.tokenize('/').last()
+            def remoteRepo = "${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com/${params.ECR_REPO_NAME}-${svc}"
+            sh """
+              docker rmi ${remoteRepo}:${env.BUILD_NUMBER} || true
+              docker rmi ${remoteRepo}:latest           || true
+              docker rmi ${params.ECR_REPO_NAME}-${svc}:${env.BUILD_NUMBER} || true
+            """
+          }
+        }
+      }
+    }
+  }
+
+  post {
+    always {
+      script {
+        def status  = currentBuild.currentResult
+        def message = [
+          text: "🚀 *Build ${status}* for *${env.JOB_NAME} #${env.BUILD_NUMBER}*\n🔗 <${env.BUILD_URL}|View Build>"
+        ]
+        sh """curl -X POST -H 'Content-Type: application/json' \
+             -d '${groovy.json.JsonOutput.toJson(message)}' \
+             'https://chat.googleapis.com/v1/spaces/AAQABmX28z8/messages?key=AIzaSy…&token=…'"""
+      }
+    }
+  }
 }
