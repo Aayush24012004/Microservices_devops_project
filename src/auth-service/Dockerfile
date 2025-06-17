@@ -1,15 +1,19 @@
-# Build stage
-FROM node:18-alpine AS build
-WORKDIR /usr/src/app
+# Base image
+FROM node:18-alpine
 
-COPY package.json package-lock.json ./
+# Create app directory
+WORKDIR /app
+
+# Install dependencies
+COPY package*.json ./
 RUN npm install
-COPY public public
-COPY src src
-RUN npm run build
 
-# Production stage
-FROM nginx:stable-alpine
-COPY --from=build /usr/src/app/build /usr/share/nginx/html
-EXPOSE 80
-CMD [ "nginx", "-g", "daemon off;" ]
+# Bundle app source
+COPY . .
+
+# If auth-service listens on PORT env or default 3000
+ENV PORT=3000
+EXPOSE 3000
+
+# Start the service
+CMD ["npm", "start"]

@@ -1,15 +1,18 @@
-# Build stage
+# Build stage: install and compile React app
 FROM node:18-alpine AS build
-WORKDIR /usr/src/app
+WORKDIR /app
 
-COPY package.json package-lock.json ./
+# Copy package files & install dependencies
+COPY package.json package-lock.json* ./
 RUN npm install
-COPY public public
-COPY src src
+
+# Copy all source and build
+COPY public ./public
+COPY src ./src
 RUN npm run build
 
-# Production stage
+# Production stage: serve via nginx
 FROM nginx:stable-alpine
-COPY --from=build /usr/src/app/build /usr/share/nginx/html
+COPY --from=build /app/build /usr/share/nginx/html
 EXPOSE 80
-CMD [ "nginx", "-g", "daemon off;" ]
+CMD ["nginx", "-g", "daemon off;"]

@@ -71,10 +71,7 @@ pipeline {
         }
     }
 }
-
-
-
-        stage('Create ECR Repository') {
+    stage('Create ECR Repository') {
             steps {
                 echo 'Running Create ECR Repository'
                 withCredentials([
@@ -95,42 +92,68 @@ pipeline {
             }
         }
 
-        stage('Login to ECR & Tag Image') {
-            steps {
-                echo 'Running Login to ECR & Tag Image'
-                withCredentials([
-                  string(credentialsId: 'access-key', variable: 'AWS_ACCESS_KEY'),
-                  string(credentialsId: 'secret-key', variable: 'AWS_SECRET_KEY')
-                ]) {
+    stage('Login to ECR & Tag Images') {
+    steps {
+        echo 'Logging in to ECR & tagging images'
+        withCredentials([
+            string(credentialsId: 'access-key', variable: 'AWS_ACCESS_KEY'),
+            string(credentialsId: 'secret-key', variable: 'AWS_SECRET_KEY')
+        ]) {
+            script {
+                sh """
+                aws configure set aws_access_key_id     $AWS_ACCESS_KEY
+                aws configure set aws_secret_access_key $AWS_SECRET_KEY
+                aws ecr get-login-password --region ${params.AWS_REGION} \
+                | docker login --username AWS \
+                  --password-stdin ${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com
+                """
+
+                def services = sh(
+                    script: "find src -maxdepth 2 -name Dockerfile | sed 's|/Dockerfile||'",
+                    returnStdout: true
+                ).trim().split('\n')
+
+                for (svcPath in services) {
+                    def svc = svcPath.tokenize('/').last()
+                    def image = "${params.ECR_REPO_NAME}-${svc}"
+                    def remoteImage = "${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com/${image}"
+                    
                     sh """
-                    aws ecr get-login-password --region ${params.AWS_REGION} \
-                      | docker login --username AWS \
-                                    --password-stdin ${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com
-                    docker tag ${params.ECR_REPO_NAME}:latest \
-                      ${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com/${params.ECR_REPO_NAME}:${env.BUILD_NUMBER}
-                    docker tag ${params.ECR_REPO_NAME}:latest \
-                      ${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com/${params.ECR_REPO_NAME}:latest
+                    docker tag ${image}:${env.BUILD_NUMBER} ${remoteImage}:${env.BUILD_NUMBER}
+                    docker tag ${image}:${env.BUILD_NUMBER} ${remoteImage}:latest
                     """
                 }
             }
         }
+    }
+}
 
-        stage('Push the Image to AWS ECR') {
-            steps {
-                echo 'Running Push the Image to AWS ECR'
-                withCredentials([
-                  string(credentialsId: 'access-key', variable: 'AWS_ACCESS_KEY'),
-                  string(credentialsId: 'secret-key', variable: 'AWS_SECRET_KEY')
-                ]) {
-                    sh """
-                    docker push ${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com/${params.ECR_REPO_NAME}:${env.BUILD_NUMBER}
-                    docker push ${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com/${params.ECR_REPO_NAME}:latest
-                    """
-                }
+
+    stage('Push Images to AWS ECR') {
+    steps {
+        echo 'Pushing images to AWS ECR'
+        script {
+            def services = sh(
+                script: "find src -maxdepth 2 -name Dockerfile | sed 's|/Dockerfile||'",
+                returnStdout: true
+            ).trim().split('\n')
+
+            for (svcPath in services) {
+                def svc = svcPath.tokenize('/').last()
+                def image = "${params.ECR_REPO_NAME}-${svc}"
+                def remoteImage = "${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com/${image}"
+
+                sh """
+                docker push ${remoteImage}:${env.BUILD_NUMBER}
+                docker push ${remoteImage}:latest
+                """
             }
         }
+    }
+}
 
-        stage('Cleanup Images from Jenkins Server') {
+
+    stage('Cleanup Images from Jenkins Server') {
             steps {
                 echo 'Running Cleanup Images from Jenkins Server'
                 sh """
