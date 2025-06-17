@@ -1,19 +1,19 @@
-# Base image
+# Use lightweight Node.js runtime
 FROM node:18-alpine
 
-# Create app directory
+# Set working directory
 WORKDIR /app
 
-# Install dependencies
-COPY package*.json ./
-RUN npm install
+# Copy and install dependencies
+COPY package.json ./
+# COPY package-lock.json ./  # uncomment if you have lock file
+RUN npm install --production
 
-# Bundle app source
-COPY . .
+# Copy service code\ nCOPY . .
 
-# If auth-service listens on PORT env or default 3000
-ENV PORT=3000
-EXPOSE 3000
+# Expose port matching code (3001)
+ENV PORT=3001
+EXPOSE 3001
 
 # Start the service
-CMD ["npm", "start"]
+CMD ["node", "index.js"]
